@@ -392,36 +392,36 @@ agent_performance_snapshots (id, agent_generation_id, snapshot_date, daily_posts
 ## Implementation Timeline
 
 ### Phase 1: Core Infrastructure  
-**Primary Sub-Agents**: Database Architecture (#1), DevOps (#10)
+**Primary Sub-Agents**: Database Architecture (#1), DevOps (#9)
 **Supporting Sub-Agents**: Testing Infrastructure (#8)
 - Database setup and basic infrastructure
 - Development environment configuration
 - Basic testing framework establishment
 
 ### Phase 2: Content Pipeline  
-**Primary Sub-Agents**: OpenAI Integration (#2), Content Generation (#7)
+**Primary Sub-Agents**: Content Generation (#2)
 **Supporting Sub-Agents**: Testing Infrastructure (#8)
 - Image generation and editing capabilities
 - Content creation and optimization systems
 - Initial testing of content pipeline
 
 ### Phase 3: Social Media Integration  
-**Primary Sub-Agents**: Social Media API (#3), Engagement Analytics (#9)
-**Supporting Sub-Agents**: Testing Infrastructure (#8), DevOps (#10)
+**Primary Sub-Agents**: Social Media API (#3), Engagement Analytics (#7)
+**Supporting Sub-Agents**: Testing Infrastructure (#8), DevOps (#9)
 - Platform API integrations
 - Posting and engagement tracking systems
 - Performance monitoring and optimization
 
 ### Phase 4: RL and Evolution  
 **Primary Sub-Agents**: Self-Evolving Social Agent (#4), Evolution Loop (#5)
-**Supporting Sub-Agents**: Testing Infrastructure (#8), DevOps (#10)
+**Supporting Sub-Agents**: Testing Infrastructure (#8), DevOps (#9)
 - Sandbox environment setup for social agent evolution
 - Self-improvement mechanisms and RL training environment
 - Reward system implementation with mock social platforms
 - Evolution loop integration and isolated testing
 
 ### Phase 5: Dashboard and Deployment  
-**Primary Sub-Agents**: Frontend Dashboard (#6), DevOps (#10)
+**Primary Sub-Agents**: Frontend Dashboard (#6), DevOps (#9)
 **Supporting Sub-Agents**: Testing Infrastructure (#8)
 - Web and mobile interface development
 - Production deployment and monitoring
