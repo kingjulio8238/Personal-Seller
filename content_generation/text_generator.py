@@ -44,9 +44,19 @@ class TextGenerator:
     """
     
     def __init__(self):
-        # Initialize LLM clients
-        self.openai_client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
-        self.anthropic_client = anthropic.Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
+        # Initialize LLM clients with version compatibility
+        try:
+            # Try new OpenAI v1.0+ client
+            self.openai_client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+        except AttributeError:
+            # Fallback for older OpenAI versions
+            openai.api_key = os.getenv('OPENAI_API_KEY')
+            self.openai_client = openai
+        
+        try:
+            self.anthropic_client = anthropic.Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
+        except Exception:
+            self.anthropic_client = None
         
         # Load platform configurations
         self.load_platform_configs()
