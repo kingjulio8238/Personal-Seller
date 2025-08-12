@@ -1,0 +1,156 @@
+{
+  "rlhf_training": {
+    "enabled": true,
+    "learning_rate": 0.0001,
+    "batch_size": 32,
+    "feedback_window_hours": 24,
+    "minimum_feedback_samples": 10,
+    "feedback_types": {
+      "approval_rating": {
+        "weight": 0.3,
+        "scale": "1-5",
+        "description": "User rating during content approval"
+      },
+      "approval_comments": {
+        "weight": 0.2,
+        "type": "text",
+        "sentiment_analysis": true,
+        "description": "User comments during content approval"
+      },
+      "schedule_feedback": {
+        "weight": 0.2,
+        "type": "binary",
+        "options": ["approve_all", "modify", "reject_regenerate"],
+        "description": "User response to daily schedule review"
+      },
+      "dsr_feedback": {
+        "weight": 0.3,
+        "type": "composite",
+        "components": {
+          "strategy_rating": {
+            "type": "binary",
+            "options": ["love_strategy", "need_improvement"]
+          },
+          "content_preferences": {
+            "type": "slider",
+            "range": [0, 1],
+            "dimensions": ["text_vs_visual", "posting_frequency", "platform_focus"]
+          },
+          "content_type_ranking": {
+            "type": "ranking",
+            "options": ["text-only", "text+image", "image-only", "text+video", "video-only"]
+          }
+        },
+        "description": "User feedback on Daily Selling Report (DSR)"
+      }
+    }
+  },
+  "reward_calculation": {
+    "base_engagement_weight": 1.0,
+    "conversion_weight": 10.0,
+    "human_feedback_weight": 2.0,
+    "temporal_decay": {
+      "enabled": true,
+      "decay_rate": 0.95,
+      "time_window_hours": 168
+    },
+    "platform_normalization": {
+      "enabled": true,
+      "baselines": {
+        "x": 0.0015,
+        "tiktok": 0.0367,
+        "instagram": 0.005
+      }
+    },
+    "quality_gates": {
+      "minimum_approval_rate": 0.6,
+      "minimum_engagement_threshold": 10,
+      "maximum_policy_violations": 0
+    }
+  },
+  "feedback_collection": {
+    "approval_notifications": {
+      "timeout_minutes": 30,
+      "reminder_intervals": [5, 15, 25],
+      "auto_approve_on_timeout": false,
+      "rating_required": true,
+      "comment_optional": true
+    },
+    "schedule_review": {
+      "send_time": "08:00",
+      "timezone": "user_preference",
+      "timeout_hours": 2,
+      "default_action": "approve_all",
+      "modification_allowed": true
+    },
+    "daily_selling_report": {
+      "send_time": "18:00",
+      "timezone": "user_preference",
+      "timeout_hours": 12,
+      "feedback_required": false,
+      "include_suggestions": true,
+      "performance_comparison": true
+    }
+  },
+  "learning_optimization": {
+    "preference_modeling": {
+      "update_frequency": "daily",
+      "memory_decay": 0.98,
+      "personalization_strength": 0.8,
+      "cold_start_period_days": 7
+    },
+    "content_alignment": {
+      "style_consistency_weight": 0.4,
+      "brand_voice_weight": 0.3,
+      "performance_weight": 0.3
+    },
+    "adaptive_posting": {
+      "timing_optimization": true,
+      "content_type_adaptation": true,
+      "platform_selection_learning": true,
+      "hashtag_optimization": true
+    }
+  },
+  "feedback_ui_settings": {
+    "mobile": {
+      "push_notifications": true,
+      "offline_cache": true,
+      "quick_actions": ["approve", "reject", "rate_and_approve"],
+      "gesture_support": true,
+      "voice_input": true
+    },
+    "desktop": {
+      "browser_notifications": true,
+      "keyboard_shortcuts": true,
+      "bulk_operations": true,
+      "advanced_editing": true,
+      "analytics_integration": true
+    },
+    "accessibility": {
+      "screen_reader": true,
+      "high_contrast": true,
+      "large_text": true,
+      "voice_commands": true
+    }
+  },
+  "privacy_and_security": {
+    "feedback_encryption": true,
+    "data_retention_days": 365,
+    "anonymization": {
+      "enabled": true,
+      "delay_hours": 24
+    },
+    "user_consent": {
+      "explicit_opt_in": true,
+      "granular_permissions": true,
+      "withdrawal_allowed": true
+    }
+  },
+  "monitoring": {
+    "feedback_quality_metrics": true,
+    "model_drift_detection": true,
+    "performance_degradation_alerts": true,
+    "user_satisfaction_tracking": true,
+    "bias_detection": true
+  }
+}

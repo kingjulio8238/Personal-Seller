@@ -1,0 +1,59 @@
+# Social Darwin Gödel Machine Additional Dependencies
+# Extends the base requirements.txt for social media functionality
+
+# Database (PostgreSQL)
+psycopg2-binary
+sqlalchemy>=1.4.0
+alembic
+
+# Social Media APIs
+tweepy>=4.12.0  # X/Twitter API v2
+facebook-sdk
+instagrapi  # Instagram API (unofficial but robust)
+requests-oauthlib
+
+# RL and ML
+stable-baselines3
+gym>=0.21.0
+torch
+numpy
+pandas
+
+# Content Generation
+pillow>=8.0.0  # Image processing
+moviepy>=1.0.3  # Video processing (if needed for local video editing)
+opencv-python  # Advanced image/video processing
+
+# Web Framework and API
+fastapi
+uvicorn
+pydantic
+jinja2
+
+# Frontend (if building React components server-side)
+# Note: React/React Native would typically be separate Node.js projects
+
+# Task Queue and Background Jobs
+celery
+redis
+
+# Monitoring and Analytics
+prometheus-client
+structlog
+
+# Additional Utilities
+python-multipart  # For file uploads
+stripe  # Payment processing integration
+python-dotenv  # Already in base requirements, but ensuring it's available
+pydantic-settings
+
+# Testing (extends base pytest)
+pytest-postgresql
+pytest-mock
+factory-boy  # For creating test fixtures
+responses  # Mock HTTP requests
+
+# Development
+black  # Code formatting
+flake8  # Linting
+mypy  # Type checking

@@ -1,0 +1,159 @@
+{
+  "platforms": {
+    "x": {
+      "name": "X (Twitter)",
+      "api_version": "v2",
+      "rate_limits": {
+        "posts_per_hour": 300,
+        "posts_per_day": 2400,
+        "media_uploads_per_hour": 300
+      },
+      "content_requirements": {
+        "text_max_length": 280,
+        "image_formats": ["jpg", "jpeg", "png", "gif", "webp"],
+        "image_max_size_mb": 5,
+        "video_formats": ["mp4", "mov"],
+        "video_max_size_mb": 512,
+        "video_max_duration_seconds": 140
+      },
+      "optimal_posting_times": {
+        "weekday": ["09:00", "12:00", "15:00", "18:00"],
+        "weekend": ["10:00", "14:00", "16:00"]
+      },
+      "engagement_weights": {
+        "likes": 1.0,
+        "retweets": 5.0,
+        "replies": 3.0,
+        "quotes": 4.0,
+        "impressions": 0.1
+      },
+      "aspect_ratios": {
+        "image": "16:9",
+        "video": "16:9"
+      }
+    },
+    "tiktok": {
+      "name": "TikTok",
+      "api_version": "v2",
+      "rate_limits": {
+        "posts_per_minute": 6,
+        "posts_per_hour": 20,
+        "posts_per_day": 100
+      },
+      "content_requirements": {
+        "text_max_length": 2200,
+        "video_formats": ["mp4", "mov", "avi"],
+        "video_max_size_mb": 64,
+        "video_min_duration_seconds": 3,
+        "video_max_duration_seconds": 180,
+        "image_formats": ["jpg", "jpeg", "png"],
+        "image_max_size_mb": 10
+      },
+      "optimal_posting_times": {
+        "weekday": ["06:00", "10:00", "19:00", "20:00"],
+        "weekend": ["09:00", "12:00", "16:00", "19:00"]
+      },
+      "engagement_weights": {
+        "likes": 1.0,
+        "shares": 5.0,
+        "comments": 3.0,
+        "views": 0.01,
+        "saves": 4.0
+      },
+      "aspect_ratios": {
+        "video": "9:16",
+        "image": "9:16"
+      },
+      "trending_analysis": {
+        "hashtag_limit": 5,
+        "sound_importance": "high",
+        "effects_importance": "medium"
+      }
+    },
+    "instagram": {
+      "name": "Instagram",
+      "api_version": "graph_api",
+      "rate_limits": {
+        "posts_per_hour": 25,
+        "posts_per_day": 25
+      },
+      "content_requirements": {
+        "text_max_length": 2200,
+        "image_formats": ["jpg", "jpeg", "png"],
+        "image_min_width": 600,
+        "image_max_size_mb": 30,
+        "video_formats": ["mp4", "mov"],
+        "video_max_size_mb": 100,
+        "video_max_duration_seconds": 60,
+        "carousel_max_items": 10
+      },
+      "optimal_posting_times": {
+        "weekday": ["08:00", "11:00", "14:00", "17:00"],
+        "weekend": ["10:00", "13:00", "16:00"]
+      },
+      "engagement_weights": {
+        "likes": 1.0,
+        "comments": 3.0,
+        "saves": 4.0,
+        "shares": 5.0,
+        "reach": 0.1
+      },
+      "aspect_ratios": {
+        "feed_image": "1:1",
+        "feed_video": "1:1",
+        "story_image": "9:16",
+        "story_video": "9:16",
+        "reel": "9:16"
+      },
+      "content_types": {
+        "feed_post": {
+          "hashtag_limit": 30,
+          "hashtag_optimal": 11
+        },
+        "story": {
+          "hashtag_limit": 10,
+          "duration_seconds": 15
+        },
+        "reel": {
+          "hashtag_limit": 30,
+          "duration_optimal": "15-30"
+        }
+      }
+    }
+  },
+  "global_settings": {
+    "retry_attempts": 3,
+    "retry_delay_seconds": 5,
+    "timeout_seconds": 30,
+    "max_concurrent_posts": 5,
+    "content_moderation": {
+      "enabled": true,
+      "strict_mode": true,
+      "flagged_keywords": ["spam", "fake", "scam"],
+      "required_approval": true
+    },
+    "backup_storage": {
+      "enabled": true,
+      "retain_days": 90
+    }
+  },
+  "error_handling": {
+    "rate_limit_exceeded": {
+      "action": "queue_retry",
+      "delay_minutes": 15
+    },
+    "authentication_failed": {
+      "action": "alert_admin",
+      "retry": false
+    },
+    "content_policy_violation": {
+      "action": "flag_for_review",
+      "notify_user": true
+    },
+    "api_unavailable": {
+      "action": "queue_retry",
+      "max_retries": 5,
+      "delay_minutes": 30
+    }
+  }
+}
