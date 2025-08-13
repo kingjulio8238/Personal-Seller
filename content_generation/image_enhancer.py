@@ -303,7 +303,7 @@ class ImageEnhancer:
             
         except Exception as e:
             self.logger.error(f"Final optimization failed: {e}")
-            return image_bytes]
+            return image_bytes
         
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)

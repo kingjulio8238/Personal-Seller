@@ -215,11 +215,22 @@ class VideoGenerator:
         if DATABASE_AVAILABLE and db_session:
             self.db_manager = DatabaseManager(db_session)
         
-        # Processing queue and rate limiting
+        # Advanced processing queue and rate limiting
         self.processing_queue = queue.PriorityQueue()
+        self.failed_queue = queue.Queue()  # For failed requests that need retry
         self._request_timestamps = []
         self._rate_limit_lock = threading.Lock()
         self.executor = ThreadPoolExecutor(max_workers=3)
+        
+        # Advanced queue management
+        self.queue_manager = {
+            'high_priority': queue.PriorityQueue(),
+            'normal_priority': queue.PriorityQueue(),
+            'low_priority': queue.PriorityQueue(),
+            'retry_queue': queue.Queue(),
+            'processing_status': {},  # Track request processing status
+            'completion_callbacks': {}  # Callbacks for completed requests
+        }
         
         # Enhanced batch processing settings
         self.batch_settings = {
@@ -227,7 +238,14 @@ class VideoGenerator:
             'retry_failed_requests': True,
             'max_retries_per_request': 2,
             'batch_timeout_seconds': 300,  # 5 minutes
-            'prioritize_by_platform': {'tiktok': 1, 'instagram': 2, 'x': 3, 'linkedin': 4}
+            'prioritize_by_platform': {
+                'tiktok': 1, 
+                'instagram': 2, 
+                'youtube_shorts': 3,
+                'x': 4, 
+                'pinterest': 5,
+                'linkedin': 6
+            }
         }
         
         # Enhanced cost tracking (Google Veo 3 pricing - estimated)
@@ -239,7 +257,14 @@ class VideoGenerator:
             'last_monthly_reset': datetime.now().date().replace(day=1),
             'requests_count': 0,
             'successful_requests': 0,
-            'platform_costs': {'x': Decimal('0.00'), 'tiktok': Decimal('0.00'), 'instagram': Decimal('0.00'), 'linkedin': Decimal('0.00')},
+            'platform_costs': {
+                'x': Decimal('0.00'), 
+                'tiktok': Decimal('0.00'), 
+                'instagram': Decimal('0.00'), 
+                'linkedin': Decimal('0.00'),
+                'pinterest': Decimal('0.00'),
+                'youtube_shorts': Decimal('0.00')
+            },
             'cost_by_quality': {'hd': Decimal('0.00'), 'standard': Decimal('0.00')},
             'cost_by_type': {'text_to_video': Decimal('0.00'), 'image_to_video': Decimal('0.00'), 'video_edit': Decimal('0.00')}
         }
@@ -274,7 +299,9 @@ class VideoGenerator:
                 'style': 'professional and informative',
                 'subtitle_safe_area': {'top': 80, 'bottom': 80},
                 'trending_features': ['clean_transitions', 'professional_text', 'data_visualization'],
-                'optimal_duration': 30
+                'optimal_duration': 30,
+                'supports_threads': True,
+                'engagement_hooks': ['question_starters', 'poll_integration', 'call_to_action']
             },
             'tiktok': {
                 'aspect_ratio': '9:16',
@@ -288,7 +315,9 @@ class VideoGenerator:
                 'trending_features': ['quick_cuts', 'zoom_effects', 'trending_sounds', 'hashtag_challenges'],
                 'optimal_duration': 15,
                 'music_integration': True,
-                'popular_effects': ['beauty_filter', 'speed_ramp', 'split_screen']
+                'popular_effects': ['beauty_filter', 'speed_ramp', 'split_screen', 'duet_ready', 'green_screen'],
+                'trending_audio_types': ['viral_sounds', 'trending_music', 'voice_effects'],
+                'content_pillars': ['entertainment', 'education', 'behind_scenes', 'trending_participation']
             },
             'instagram': {
                 'aspect_ratio': '9:16',
@@ -302,7 +331,9 @@ class VideoGenerator:
                 'trending_features': ['smooth_transitions', 'lifestyle_context', 'story_integration'],
                 'optimal_duration': 30,
                 'story_safe_zones': True,
-                'supports_shopping_tags': True
+                'supports_shopping_tags': True,
+                'alternative_ratios': [(1080, 1080), (1080, 1350)],  # Square and 4:5 formats
+                'content_types': ['reels', 'stories', 'feed_video']
             },
             'linkedin': {
                 'aspect_ratio': '16:9',
@@ -315,7 +346,36 @@ class VideoGenerator:
                 'subtitle_safe_area': {'top': 100, 'bottom': 100},
                 'trending_features': ['thought_leadership', 'industry_insights', 'professional_testimonials'],
                 'optimal_duration': 90,
-                'captions_required': True
+                'captions_required': True,
+                'business_elements': ['company_branding', 'professional_cta', 'industry_context']
+            },
+            'pinterest': {
+                'aspect_ratio': '9:16',
+                'dimensions': (1080, 1920),
+                'max_duration': 15,
+                'format': 'mp4',
+                'fps': 30,
+                'bitrate': '2M',
+                'style': 'inspirational and visually appealing',
+                'subtitle_safe_area': {'top': 50, 'bottom': 50},
+                'trending_features': ['diy_tutorials', 'before_after', 'lifestyle_inspiration'],
+                'optimal_duration': 6,
+                'engagement_hooks': ['save_worthy', 'how_to_content', 'seasonal_trends'],
+                'visual_elements': ['bright_colors', 'clear_text_overlay', 'step_by_step'],
+                'supports_idea_pins': True
+            },
+            'youtube_shorts': {
+                'aspect_ratio': '9:16',
+                'dimensions': (1080, 1920),
+                'max_duration': 60,
+                'format': 'mp4',
+                'fps': 30,
+                'bitrate': '3M',
+                'style': 'engaging and informative',
+                'subtitle_safe_area': {'top': 100, 'bottom': 150},
+                'trending_features': ['tutorial_format', 'quick_tips', 'entertainment'],
+                'optimal_duration': 30,
+                'content_hooks': ['surprising_facts', 'how_to_guides', 'product_demos']
             }
         }
         
@@ -344,6 +404,30 @@ class VideoGenerator:
             'max_duration': 300,
             'min_resolution': (720, 480),
             'min_bitrate': 500000  # 500 kbps
+        }
+        
+        # Video template system for consistent branding
+        self.template_system = {
+            'templates': self._initialize_video_templates(),
+            'brand_elements': {
+                'colors': {
+                    'primary': '#1E40AF',    # Blue
+                    'secondary': '#F59E0B',  # Amber
+                    'accent': '#10B981',     # Emerald
+                    'neutral': '#6B7280'     # Gray
+                },
+                'fonts': {
+                    'primary': 'Arial-Bold',
+                    'secondary': 'Arial',
+                    'accent': 'Helvetica'
+                },
+                'logo_positions': {
+                    'bottom_right': (0.85, 0.9),
+                    'top_left': (0.05, 0.1),
+                    'center_bottom': (0.5, 0.9)
+                }
+            },
+            'custom_templates': {}  # User-defined templates
         }
 
     def _init_google_services(self):
@@ -389,6 +473,291 @@ class VideoGenerator:
         self.veo_service = MockVeo3Service()
         self.storage_client = MockGoogleCloudStorage()
         self.using_mock_services = True
+
+    def _initialize_video_templates(self) -> Dict[str, Any]:
+        """Initialize built-in video templates for consistent branding"""
+        return {
+            'professional': {
+                'name': 'Professional Business',
+                'description': 'Clean, professional template for business content',
+                'platforms': ['linkedin', 'x'],
+                'elements': {
+                    'intro_duration': 2,
+                    'outro_duration': 2,
+                    'background_color': (240, 240, 240),
+                    'text_color': (50, 50, 50),
+                    'accent_color': (30, 64, 175),  # Blue
+                    'font_primary': 'Arial-Bold',
+                    'font_secondary': 'Arial',
+                    'logo_position': 'bottom_right',
+                    'transitions': ['fade', 'slide'],
+                    'effects': ['professional_zoom', 'subtle_glow']
+                },
+                'layout': {
+                    'title_position': (0.5, 0.2),
+                    'content_area': (0.1, 0.3, 0.9, 0.7),
+                    'branding_area': (0.8, 0.85, 1.0, 1.0)
+                }
+            },
+            'trendy': {
+                'name': 'Trendy Social',
+                'description': 'Dynamic template for social media platforms',
+                'platforms': ['tiktok', 'instagram', 'youtube_shorts'],
+                'elements': {
+                    'intro_duration': 1,
+                    'outro_duration': 1,
+                    'background_gradient': [(255, 100, 150), (100, 200, 255)],
+                    'text_color': (255, 255, 255),
+                    'accent_color': (255, 215, 0),  # Gold
+                    'font_primary': 'Arial-Bold',
+                    'font_secondary': 'Arial',
+                    'logo_position': 'center_bottom',
+                    'transitions': ['zoom', 'flash', 'slide'],
+                    'effects': ['particle_overlay', 'dynamic_border', 'color_shift']
+                },
+                'layout': {
+                    'title_position': (0.5, 0.15),
+                    'content_area': (0.05, 0.25, 0.95, 0.75),
+                    'branding_area': (0.2, 0.85, 0.8, 1.0)
+                }
+            },
+            'lifestyle': {
+                'name': 'Lifestyle & Inspiration',
+                'description': 'Aesthetic template for lifestyle content',
+                'platforms': ['instagram', 'pinterest'],
+                'elements': {
+                    'intro_duration': 1.5,
+                    'outro_duration': 2,
+                    'background_color': (250, 250, 245),  # Warm white
+                    'text_color': (100, 100, 100),
+                    'accent_color': (220, 160, 130),  # Warm brown
+                    'font_primary': 'Helvetica-Light',
+                    'font_secondary': 'Helvetica',
+                    'logo_position': 'top_left',
+                    'transitions': ['fade', 'smooth_slide'],
+                    'effects': ['soft_glow', 'warm_filter']
+                },
+                'layout': {
+                    'title_position': (0.5, 0.25),
+                    'content_area': (0.1, 0.35, 0.9, 0.8),
+                    'branding_area': (0.05, 0.05, 0.3, 0.2)
+                }
+            },
+            'minimal': {
+                'name': 'Minimal Clean',
+                'description': 'Clean, minimal template for all platforms',
+                'platforms': ['x', 'linkedin', 'instagram', 'youtube_shorts'],
+                'elements': {
+                    'intro_duration': 1,
+                    'outro_duration': 1.5,
+                    'background_color': (255, 255, 255),
+                    'text_color': (30, 30, 30),
+                    'accent_color': (100, 100, 100),
+                    'font_primary': 'Arial',
+                    'font_secondary': 'Arial',
+                    'logo_position': 'bottom_right',
+                    'transitions': ['fade'],
+                    'effects': ['subtle_shadow']
+                },
+                'layout': {
+                    'title_position': (0.5, 0.3),
+                    'content_area': (0.15, 0.4, 0.85, 0.8),
+                    'branding_area': (0.85, 0.9, 1.0, 1.0)
+                }
+            }
+        }
+    
+    def create_video_with_template(self, template_name: str, request: VideoGenerationRequest, 
+                                 custom_brand_elements: Dict[str, Any] = None) -> VideoGenerationRequest:
+        """Apply video template to enhance request with consistent branding"""
+        try:
+            template = self.template_system['templates'].get(template_name)
+            if not template:
+                # Check custom templates
+                template = self.template_system['custom_templates'].get(template_name)
+                if not template:
+                    self.logger.warning(f"Template '{template_name}' not found, using default styling")
+                    return request
+            
+            # Check if template supports the target platform
+            if request.platform not in template['platforms']:
+                self.logger.info(f"Template '{template_name}' not optimized for {request.platform}, adapting")
+            
+            # Apply template elements to request
+            enhanced_request = self._apply_template_to_request(request, template, custom_brand_elements)
+            
+            return enhanced_request
+            
+        except Exception as e:
+            self.logger.error(f"Failed to apply template '{template_name}': {e}")
+            return request
+    
+    def _apply_template_to_request(self, request: VideoGenerationRequest, template: Dict[str, Any], 
+                                 custom_brand_elements: Dict[str, Any] = None) -> VideoGenerationRequest:
+        """Apply template styling to video generation request"""
+        
+        # Merge custom brand elements with template defaults
+        brand_elements = self.template_system['brand_elements'].copy()
+        if custom_brand_elements:
+            brand_elements.update(custom_brand_elements)
+        
+        # Enhance product data with template information
+        enhanced_product_data = request.product_data.copy()
+        enhanced_product_data['template_info'] = {
+            'template_name': template['name'],
+            'template_elements': template['elements'],
+            'brand_elements': brand_elements,
+            'layout': template['layout']
+        }
+        
+        # Create enhanced request
+        enhanced_request = VideoGenerationRequest(
+            input_type=request.input_type,
+            input_data=request.input_data,
+            platform=request.platform,
+            product_data=enhanced_product_data,
+            style=f"{request.style} with {template['name']} template",
+            duration=request.duration,
+            quality=request.quality,
+            priority=request.priority,
+            max_retries=request.max_retries,
+            use_moderation=request.use_moderation,
+            enhance_audio=request.enhance_audio,
+            add_captions=request.add_captions
+        )
+        
+        return enhanced_request
+    
+    def get_available_templates(self, platform: str = None) -> List[Dict[str, Any]]:
+        """Get list of available templates, optionally filtered by platform"""
+        templates = []
+        
+        # Built-in templates
+        for template_id, template in self.template_system['templates'].items():
+            if platform is None or platform in template['platforms']:
+                templates.append({
+                    'id': template_id,
+                    'name': template['name'],
+                    'description': template['description'],
+                    'platforms': template['platforms'],
+                    'type': 'built-in'
+                })
+        
+        # Custom templates
+        for template_id, template in self.template_system['custom_templates'].items():
+            if platform is None or platform in template.get('platforms', []):
+                templates.append({
+                    'id': template_id,
+                    'name': template.get('name', template_id),
+                    'description': template.get('description', 'Custom template'),
+                    'platforms': template.get('platforms', ['all']),
+                    'type': 'custom'
+                })
+        
+        return templates
+    
+    def create_custom_template(self, template_id: str, template_config: Dict[str, Any]) -> bool:
+        """Create a custom video template"""
+        try:
+            # Validate template configuration
+            required_fields = ['name', 'elements']
+            for field in required_fields:
+                if field not in template_config:
+                    self.logger.error(f"Template missing required field: {field}")
+                    return False
+            
+            # Set default values
+            template_config.setdefault('platforms', ['x', 'tiktok', 'instagram', 'linkedin'])
+            template_config.setdefault('description', f"Custom template: {template_config['name']}")
+            
+            # Validate elements
+            elements = template_config['elements']
+            if 'background_color' not in elements and 'background_gradient' not in elements:
+                elements['background_color'] = (255, 255, 255)  # Default white
+            
+            elements.setdefault('text_color', (0, 0, 0))
+            elements.setdefault('font_primary', 'Arial')
+            elements.setdefault('logo_position', 'bottom_right')
+            
+            # Store custom template
+            self.template_system['custom_templates'][template_id] = template_config
+            
+            self.logger.info(f"Created custom template: {template_id}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to create custom template: {e}")
+            return False
+    
+    def update_brand_elements(self, brand_updates: Dict[str, Any]) -> bool:
+        """Update global brand elements for all templates"""
+        try:
+            # Update colors
+            if 'colors' in brand_updates:
+                self.template_system['brand_elements']['colors'].update(brand_updates['colors'])
+            
+            # Update fonts
+            if 'fonts' in brand_updates:
+                self.template_system['brand_elements']['fonts'].update(brand_updates['fonts'])
+            
+            # Update logo positions
+            if 'logo_positions' in brand_updates:
+                self.template_system['brand_elements']['logo_positions'].update(brand_updates['logo_positions'])
+            
+            self.logger.info("Brand elements updated successfully")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to update brand elements: {e}")
+            return False
+    
+    async def create_branded_video_variants(self, enhanced_image_path: str, product_data: Dict[str, Any],
+                                          platforms: List[str] = None, template_name: str = 'professional',
+                                          **kwargs) -> Dict[str, VideoGenerationResult]:
+        """Create video variants with consistent branding using templates"""
+        if platforms is None:
+            platforms = ['x', 'tiktok', 'instagram', 'linkedin']
+        
+        self.logger.info(f"Creating branded videos with template '{template_name}' for {len(platforms)} platforms")
+        
+        results = {}
+        
+        for platform in platforms:
+            try:
+                # Create base request
+                request = VideoGenerationRequest(
+                    input_type='image',
+                    input_data=enhanced_image_path,
+                    platform=platform,
+                    product_data=product_data,
+                    **kwargs
+                )
+                
+                # Apply template
+                templated_request = self.create_video_with_template(template_name, request)
+                
+                # Generate video
+                result = await self.create_video_with_veo3(templated_request)
+                results[platform] = result
+                
+                if result.success:
+                    self.logger.info(f"✓ Created branded video for {platform}")
+                else:
+                    self.logger.warning(f"⚠ Branded video creation failed for {platform}: {result.error_message}")
+                    
+            except Exception as e:
+                self.logger.error(f"✗ Exception creating branded video for {platform}: {e}")
+                results[platform] = VideoGenerationResult(
+                    success=False,
+                    video_path=None,
+                    metadata={'template_error': str(e)},
+                    cost=Decimal('0.00'),
+                    processing_time=0.0,
+                    platform=platform,
+                    error_message=f"Template application failed: {e}"
+                )
+        
+        return results
 
     def generate_video_prompt(self, platform: str, product_data: Dict[str, Any], 
                             input_type: str = 'image', image_description: str = "", 
@@ -459,7 +828,31 @@ class VideoGenerator:
             - Ensure all content is caption-accessible
             - Duration: {duration} seconds (can be longer for detailed explanation)
             - Include professional elements: {', '.join(trending_features)}
-            - Focus on thought leadership and industry expertise"""
+            - Focus on thought leadership and industry expertise""",
+            
+            'pinterest': f"""{base_prompt}
+            Style: {style}. Create an inspiring Pinterest Idea Pin video.
+            - Show {product_name} in aspirational, lifestyle context
+            - Use bright, vibrant colors and clear visual hierarchy
+            - Create save-worthy content with DIY or tutorial elements
+            - Include step-by-step or before/after sequences
+            - Use 9:16 vertical format optimized for mobile Pinterest
+            - Add clear text overlays for key information
+            - Duration: exactly {duration} seconds (short and impactful)
+            - Include Pinterest elements: {', '.join(trending_features)}
+            - Focus on inspiration and practical value""",
+            
+            'youtube_shorts': f"""{base_prompt}
+            Style: {style}. Create an engaging YouTube Shorts video.
+            - Hook viewers within first 3 seconds with surprising fact or question
+            - Show {product_name} with educational or entertaining approach
+            - Use quick-paced editing with clear information delivery
+            - Include how-to elements or product demonstrations
+            - Use 9:16 vertical format for mobile consumption
+            - Ensure content works without sound (visual storytelling)
+            - Duration: exactly {duration} seconds
+            - Include YouTube elements: {', '.join(trending_features)}
+            - Focus on subscriber growth and engagement"""
         }
         
         prompt = platform_prompts.get(platform, platform_prompts['x'])
@@ -702,10 +1095,16 @@ class VideoGenerator:
             text_clip = self._create_platform_text_overlay(request, platform_spec, duration)
             effects_clips.append(text_clip)
         
-        # Add background music for TikTok if requested
+        # Add advanced transitions and effects
+        if request.platform in ['tiktok', 'instagram']:
+            transition_effects = self._apply_advanced_transitions(image_clip, duration, request.platform)
+            if transition_effects:
+                effects_clips.extend(transition_effects)
+        
+        # Add background music for platforms that support it
         final_clips = [image_clip] + effects_clips
-        if request.platform == 'tiktok' and request.enhance_audio:
-            audio_clip = self._add_trending_audio(duration)
+        if request.enhance_audio and request.platform in ['tiktok', 'instagram', 'youtube_shorts']:
+            audio_clip = self._add_trending_audio(duration, request.platform)
             if audio_clip:
                 final_clips.append(audio_clip)
         
@@ -811,6 +1210,144 @@ class VideoGenerator:
         clip = clip.fx(vfx.lum_contrast, 0, 10, 128)
         
         return clip
+    
+    def _apply_advanced_transitions(self, clip: VideoFileClip, duration: int, platform: str) -> List[VideoFileClip]:
+        """Apply advanced transitions and effects for enhanced visual appeal"""
+        transition_effects = []
+        
+        try:
+            if platform == 'tiktok':
+                # TikTok-style flash transitions
+                flash_effect = self._create_flash_transition(clip, duration)
+                if flash_effect:
+                    transition_effects.append(flash_effect)
+                
+                # Add trendy border effects
+                border_effect = self._create_dynamic_border(clip, duration)
+                if border_effect:
+                    transition_effects.append(border_effect)
+                    
+            elif platform == 'instagram':
+                # Instagram-style smooth fades
+                fade_effect = self._create_smooth_fade_overlay(clip, duration)
+                if fade_effect:
+                    transition_effects.append(fade_effect)
+                
+                # Add aesthetic particle effects
+                particle_effect = self._create_particle_overlay(clip, duration)
+                if particle_effect:
+                    transition_effects.append(particle_effect)
+                    
+        except Exception as e:
+            self.logger.error(f"Failed to apply advanced transitions: {e}")
+            
+        return transition_effects
+    
+    def _create_flash_transition(self, clip: VideoFileClip, duration: int) -> Optional[VideoFileClip]:
+        """Create TikTok-style flash transition effect"""
+        try:
+            # Create flash overlay
+            flash_color = (255, 255, 255)  # White flash
+            flash_duration = 0.1
+            flash_times = [duration * 0.25, duration * 0.5, duration * 0.75]
+            
+            flash_clips = []
+            for flash_time in flash_times:
+                if flash_time + flash_duration < duration:
+                    flash_clip = ColorClip(
+                        size=clip.size,
+                        color=flash_color,
+                        duration=flash_duration
+                    ).set_start(flash_time).set_opacity(0.3)
+                    flash_clips.append(flash_clip)
+            
+            if flash_clips:
+                return CompositeVideoClip(flash_clips)
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"Flash transition creation failed: {e}")
+            return None
+    
+    def _create_dynamic_border(self, clip: VideoFileClip, duration: int) -> Optional[VideoFileClip]:
+        """Create dynamic border effect"""
+        try:
+            # Create animated border
+            border_width = 10
+            border_color = (255, 100, 150)  # Trendy pink/purple
+            
+            def make_border(t):
+                # Animate border thickness
+                thickness = int(border_width * (1 + 0.3 * np.sin(t * 4)))
+                return thickness
+            
+            # Create border mask (simplified version)
+            border_clip = ColorClip(
+                size=clip.size,
+                color=border_color,
+                duration=duration
+            ).set_opacity(0.2)
+            
+            return border_clip
+            
+        except Exception as e:
+            self.logger.error(f"Dynamic border creation failed: {e}")
+            return None
+    
+    def _create_smooth_fade_overlay(self, clip: VideoFileClip, duration: int) -> Optional[VideoFileClip]:
+        """Create Instagram-style smooth fade overlay"""
+        try:
+            # Create gradient overlay
+            overlay_color = (255, 255, 255)  # White overlay
+            
+            # Create fade effect
+            fade_clip = ColorClip(
+                size=clip.size,
+                color=overlay_color,
+                duration=duration
+            ).set_opacity(0.1)
+            
+            # Apply fade in/out
+            fade_clip = fade_clip.fadein(1).fadeout(1)
+            
+            return fade_clip
+            
+        except Exception as e:
+            self.logger.error(f"Smooth fade overlay creation failed: {e}")
+            return None
+    
+    def _create_particle_overlay(self, clip: VideoFileClip, duration: int) -> Optional[VideoFileClip]:
+        """Create aesthetic particle overlay effect"""
+        try:
+            # Create simple particle effect using small colored circles
+            particle_clips = []
+            num_particles = 5
+            
+            for i in range(num_particles):
+                # Create small colored circle
+                particle_size = (20, 20)
+                particle_color = [(255, 200, 100), (255, 150, 200), (150, 255, 200)][i % 3]
+                
+                particle_clip = ColorClip(
+                    size=particle_size,
+                    color=particle_color,
+                    duration=duration
+                ).set_opacity(0.3)
+                
+                # Random position and movement
+                start_x = 50 + (i * 200) % (clip.size[0] - 100)
+                start_y = 50 + (i * 150) % (clip.size[1] - 100)
+                
+                particle_clip = particle_clip.set_position((start_x, start_y))
+                particle_clips.append(particle_clip)
+            
+            if particle_clips:
+                return CompositeVideoClip(particle_clips)
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"Particle overlay creation failed: {e}")
+            return None
 
     def _create_platform_text_overlay(self, request: VideoGenerationRequest, 
                                      platform_spec: Dict[str, Any], duration: int) -> TextClip:
@@ -899,14 +1436,114 @@ class VideoGenerator:
         
         return txt_clip
     
-    def _add_trending_audio(self, duration: int) -> Optional[AudioFileClip]:
-        """Add trending audio for TikTok (placeholder for future music integration)"""
+    def _add_trending_audio(self, duration: int, platform: str = 'tiktok') -> Optional[AudioFileClip]:
+        """Add trending audio with comprehensive music integration"""
         try:
-            # This would integrate with a music library API in production
-            # For now, return None to indicate no audio
+            # Advanced music integration system
+            music_library = self._get_music_library_for_platform(platform)
+            
+            if not music_library:
+                return self._create_ambient_audio(duration)
+            
+            # Select appropriate audio based on platform and duration
+            selected_audio = self._select_optimal_audio(music_library, platform, duration)
+            
+            if selected_audio:
+                return self._process_audio_for_platform(selected_audio, platform, duration)
+            
             return None
+            
         except Exception as e:
             self.logger.error(f"Failed to add trending audio: {e}")
+            return None
+    
+    def _get_music_library_for_platform(self, platform: str) -> Dict[str, Any]:
+        """Get music library options for specific platform"""
+        # In production, this would integrate with:
+        # - Epidemic Sound API
+        # - AudioJungle API
+        # - Freesound API
+        # - Platform-specific trending audio APIs
+        
+        music_libraries = {
+            'tiktok': {
+                'trending_categories': ['pop', 'electronic', 'hip_hop', 'ambient'],
+                'popular_durations': [15, 30, 60],
+                'energy_levels': ['high', 'medium', 'chill'],
+                'trending_tags': ['viral2024', 'product_showcase', 'background_music']
+            },
+            'instagram': {
+                'trending_categories': ['indie', 'pop', 'acoustic', 'electronic'],
+                'popular_durations': [30, 60],
+                'energy_levels': ['medium', 'chill', 'upbeat'],
+                'aesthetic_match': True
+            },
+            'youtube_shorts': {
+                'trending_categories': ['royalty_free', 'background', 'tutorial_music'],
+                'popular_durations': [30, 60],
+                'energy_levels': ['medium', 'informative']
+            },
+            'pinterest': {
+                'trending_categories': ['ambient', 'acoustic', 'lifestyle'],
+                'popular_durations': [6, 15],
+                'energy_levels': ['chill', 'inspiring']
+            }
+        }
+        
+        return music_libraries.get(platform, {})
+    
+    def _select_optimal_audio(self, music_library: Dict[str, Any], platform: str, duration: int) -> Optional[str]:
+        """Select optimal audio track based on platform requirements"""
+        if not music_library:
+            return None
+        
+        # Mock audio selection logic
+        # In production, this would query actual music APIs
+        preferred_categories = music_library.get('trending_categories', ['ambient'])
+        
+        # Return mock audio path for testing
+        return f"mock_audio_{platform}_{duration}s_{preferred_categories[0]}.mp3"
+    
+    def _process_audio_for_platform(self, audio_path: str, platform: str, duration: int) -> Optional[AudioFileClip]:
+        """Process audio file for platform-specific requirements"""
+        try:
+            # In production, load actual audio file
+            # For now, create a mock audio clip
+            return self._create_ambient_audio(duration)
+            
+        except Exception as e:
+            self.logger.error(f"Audio processing failed: {e}")
+            return None
+    
+    def _create_ambient_audio(self, duration: int) -> Optional[AudioFileClip]:
+        """Create ambient audio track for video"""
+        try:
+            # Create a simple tone using numpy for testing
+            import numpy as np
+            from scipy.io import wavfile
+            
+            sample_rate = 44100
+            t = np.linspace(0, duration, int(sample_rate * duration))
+            
+            # Create gentle ambient tone
+            frequency = 220  # A3 note
+            audio_data = 0.1 * np.sin(2 * np.pi * frequency * t)
+            
+            # Add some variation
+            audio_data += 0.05 * np.sin(2 * np.pi * (frequency * 1.5) * t)
+            audio_data = audio_data * np.exp(-t / duration)  # Fade out
+            
+            # Save to temp file
+            temp_audio_path = os.path.join(self.audio_dir, f"ambient_{int(time.time())}.wav")
+            
+            # Convert to int16 for WAV format
+            audio_int = np.int16(audio_data * 32767)
+            wavfile.write(temp_audio_path, sample_rate, audio_int)
+            
+            return AudioFileClip(temp_audio_path)
+            
+        except Exception as e:
+            self.logger.error(f"Failed to create ambient audio: {e}")
             return None
 
     def optimize_for_platform(self, video_path: str, platform: str) -> str:
@@ -926,6 +1563,10 @@ class VideoGenerator:
                 video_clip = self._optimize_for_x(video_clip, platform_spec)
             elif platform == 'linkedin':
                 video_clip = self._optimize_for_linkedin(video_clip, platform_spec)
+            elif platform == 'pinterest':
+                video_clip = self._optimize_for_pinterest(video_clip, platform_spec)
+            elif platform == 'youtube_shorts':
+                video_clip = self._optimize_for_youtube_shorts(video_clip, platform_spec)
             
             # Ensure duration compliance
             if video_clip.duration > platform_spec['max_duration']:
@@ -1008,6 +1649,27 @@ class VideoGenerator:
         
         return clip
     
+    def _optimize_for_pinterest(self, clip: VideoFileClip, platform_spec: Dict[str, Any]) -> VideoFileClip:
+        """Pinterest Idea Pins optimization"""
+        # Ensure vertical format
+        clip = clip.resize(platform_spec['dimensions'])
+        
+        # Pinterest-friendly bright and vibrant colors
+        clip = clip.fx(vfx.colorx, 1.1)  # Slight saturation boost
+        clip = clip.fx(vfx.lum_contrast, 0, 15, 128)  # Increase contrast
+        
+        return clip
+    
+    def _optimize_for_youtube_shorts(self, clip: VideoFileClip, platform_spec: Dict[str, Any]) -> VideoFileClip:
+        """YouTube Shorts optimization"""
+        # Vertical format
+        clip = clip.resize(platform_spec['dimensions'])
+        
+        # YouTube-friendly enhancement
+        clip = clip.fx(vfx.lum_contrast, 0, 12, 128)
+        
+        return clip
+    
     def _get_platform_ffmpeg_params(self, platform: str) -> List[str]:
         """Get platform-specific FFmpeg encoding parameters"""
         params = []
@@ -1029,6 +1691,20 @@ class VideoGenerator:
                 '-profile:v', 'high',
                 '-level', '4.2',
                 '-pix_fmt', 'yuv420p'
+            ])
+        elif platform == 'pinterest':
+            params.extend([
+                '-profile:v', 'main',
+                '-level', '4.0',
+                '-pix_fmt', 'yuv420p',
+                '-movflags', '+faststart'  # Fast start for Pinterest
+            ])
+        elif platform == 'youtube_shorts':
+            params.extend([
+                '-profile:v', 'high',
+                '-level', '4.2',
+                '-pix_fmt', 'yuv420p',
+                '-movflags', '+faststart'
             ])
         
         return params
@@ -1189,6 +1865,750 @@ class VideoGenerator:
         )
         
         return variants
+    
+    def get_comprehensive_analytics(self) -> Dict[str, Any]:
+        """Get comprehensive analytics and performance metrics"""
+        try:
+            cost_summary = self.get_cost_summary()
+            queue_status = self.get_queue_status()
+            
+            # Calculate performance metrics
+            analytics = {
+                'performance_metrics': self._calculate_performance_metrics(),
+                'cost_analysis': self._get_detailed_cost_analysis(cost_summary),
+                'platform_analytics': self._get_platform_performance_analytics(),
+                'quality_metrics': self._get_quality_performance_metrics(),
+                'template_usage': self._get_template_usage_analytics(),
+                'system_health': self._get_system_health_metrics(),
+                'processing_efficiency': self._get_processing_efficiency_metrics(),
+                'recommendation_engine': self._get_optimization_recommendations()
+            }
+            
+            # Add metadata
+            analytics['metadata'] = {
+                'generated_at': datetime.utcnow().isoformat(),
+                'system_version': '2.0.0',
+                'features_enabled': self._get_enabled_features(),
+                'uptime_info': self._get_system_uptime()
+            }
+            
+            return analytics
+            
+        except Exception as e:
+            self.logger.error(f"Analytics generation failed: {e}")
+            return {
+                'error': str(e),
+                'generated_at': datetime.utcnow().isoformat(),
+                'status': 'analytics_unavailable'
+            }
+    
+    def _calculate_performance_metrics(self) -> Dict[str, Any]:
+        """Calculate detailed performance metrics"""
+        total_requests = self._cost_tracker['requests_count']
+        successful_requests = self._cost_tracker['successful_requests']
+        
+        # Calculate success rates and trends
+        success_rate = successful_requests / total_requests if total_requests > 0 else 0
+        
+        # Platform performance analysis
+        platform_performance = {}
+        for platform, cost in self._cost_tracker['platform_costs'].items():
+            if cost > 0:  # Only include platforms that have been used
+                platform_performance[platform] = {
+                    'total_cost': float(cost),
+                    'estimated_requests': max(1, int(cost / 0.25)),  # Rough estimation
+                    'avg_cost_per_request': float(cost) / max(1, int(cost / 0.25))
+                }
+        
+        return {
+            'overall_success_rate': success_rate,
+            'total_requests': total_requests,
+            'successful_requests': successful_requests,
+            'failed_requests': total_requests - successful_requests,
+            'platform_performance': platform_performance,
+            'quality_distribution': {
+                'hd_usage': float(self._cost_tracker['cost_by_quality']['hd']),
+                'standard_usage': float(self._cost_tracker['cost_by_quality']['standard'])
+            },
+            'request_type_distribution': {
+                'text_to_video': float(self._cost_tracker['cost_by_type']['text_to_video']),
+                'image_to_video': float(self._cost_tracker['cost_by_type']['image_to_video']),
+                'video_edit': float(self._cost_tracker['cost_by_type']['video_edit'])
+            }
+        }
+    
+    def _get_detailed_cost_analysis(self, cost_summary: Dict[str, Any]) -> Dict[str, Any]:
+        """Enhanced cost analysis with predictions and optimization suggestions"""
+        daily_cost = cost_summary['costs']['daily']
+        monthly_cost = cost_summary['costs']['monthly']
+        
+        # Predict monthly cost based on daily usage
+        days_in_month = 30
+        current_day_of_month = datetime.now().day
+        projected_monthly_cost = (daily_cost * days_in_month) if daily_cost > 0 else monthly_cost
+        
+        # Cost efficiency analysis
+        avg_cost_per_video = cost_summary['analytics']['avg_cost_per_video']
+        cost_efficiency_score = min(100, max(0, (1.0 - avg_cost_per_video) * 100)) if avg_cost_per_video > 0 else 100
+        
+        return {
+            'cost_summary': cost_summary,
+            'projections': {
+                'projected_monthly_cost': projected_monthly_cost,
+                'days_remaining_in_month': days_in_month - current_day_of_month,
+                'budget_burn_rate': daily_cost,
+                'estimated_videos_remaining_in_budget': self._calculate_remaining_budget_videos()
+            },
+            'efficiency_metrics': {
+                'cost_efficiency_score': cost_efficiency_score,
+                'platform_cost_ranking': self._rank_platforms_by_cost_efficiency(),
+                'quality_cost_ratio': self._calculate_quality_cost_ratio()
+            },
+            'optimization_opportunities': self._identify_cost_optimization_opportunities()
+        }
+    
+    def _get_platform_performance_analytics(self) -> Dict[str, Any]:
+        """Analyze performance across different platforms"""
+        platform_analytics = {}
+        
+        for platform, specs in self.platform_specs.items():
+            platform_cost = self._cost_tracker['platform_costs'].get(platform, Decimal('0.00'))
+            estimated_videos = max(1, int(float(platform_cost) / 0.25)) if platform_cost > 0 else 0
+            
+            platform_analytics[platform] = {
+                'specifications': {
+                    'dimensions': specs['dimensions'],
+                    'max_duration': specs['max_duration'],
+                    'optimal_duration': specs['optimal_duration'],
+                    'aspect_ratio': specs['aspect_ratio']
+                },
+                'usage_stats': {
+                    'total_cost': float(platform_cost),
+                    'estimated_videos_created': estimated_videos,
+                    'avg_cost_per_video': float(platform_cost) / max(1, estimated_videos)
+                },
+                'performance_score': self._calculate_platform_performance_score(platform),
+                'trending_features': specs.get('trending_features', []),
+                'optimization_level': self._assess_platform_optimization(platform)
+            }
+        
+        return platform_analytics
+    
+    def _get_quality_performance_metrics(self) -> Dict[str, Any]:
+        """Analyze quality metrics and performance"""
+        hd_cost = float(self._cost_tracker['cost_by_quality']['hd'])
+        standard_cost = float(self._cost_tracker['cost_by_quality']['standard'])
+        total_cost = hd_cost + standard_cost
+        
+        if total_cost == 0:
+            return {
+                'usage_distribution': {'hd': 0, 'standard': 0},
+                'recommendations': ['No quality data available yet']
+            }
+        
+        return {
+            'usage_distribution': {
+                'hd': (hd_cost / total_cost) * 100,
+                'standard': (standard_cost / total_cost) * 100
+            },
+            'cost_comparison': {
+                'hd_total_cost': hd_cost,
+                'standard_total_cost': standard_cost,
+                'cost_difference': hd_cost - standard_cost
+            },
+            'recommendations': self._get_quality_recommendations(hd_cost, standard_cost)
+        }
+    
+    def _get_template_usage_analytics(self) -> Dict[str, Any]:
+        """Analyze template system usage and performance"""
+        available_templates = self.get_available_templates()
+        
+        return {
+            'available_templates': {
+                'built_in_count': len([t for t in available_templates if t['type'] == 'built-in']),
+                'custom_count': len([t for t in available_templates if t['type'] == 'custom']),
+                'total_templates': len(available_templates)
+            },
+            'template_catalog': available_templates,
+            'brand_elements': self.template_system['brand_elements'],
+            'template_recommendations': self._get_template_recommendations()
+        }
+    
+    def _get_system_health_metrics(self) -> Dict[str, Any]:
+        """Get system health and status metrics"""
+        queue_status = self.get_queue_status()
+        
+        return {
+            'api_status': {
+                'veo3_service': 'connected' if self.veo_service and not self.using_mock_services else 'mock',
+                'google_storage': 'connected' if self.storage_client and not self.using_mock_services else 'mock',
+                'database': 'connected' if self.db_manager else 'unavailable'
+            },
+            'queue_health': {
+                'total_queued': queue_status['total_queued'],
+                'processing_capacity': queue_status['concurrent_limit'],
+                'retry_system': 'enabled' if queue_status['retry_enabled'] else 'disabled',
+                'queue_status': 'healthy' if queue_status['total_queued'] < 100 else 'busy'
+            },
+            'resource_usage': {
+                'temp_files': len(os.listdir(self.temp_dir)) if os.path.exists(self.temp_dir) else 0,
+                'cache_files': len(os.listdir(self.cache_dir)) if os.path.exists(self.cache_dir) else 0,
+                'executor_threads': self.executor._max_workers
+            },
+            'error_rates': self._calculate_error_rates()
+        }
+    
+    def _get_processing_efficiency_metrics(self) -> Dict[str, Any]:
+        """Calculate processing efficiency metrics"""
+        return {
+            'batch_processing': {
+                'max_concurrent': self.batch_settings['max_concurrent_videos'],
+                'retry_enabled': self.batch_settings['retry_failed_requests'],
+                'timeout_seconds': self.batch_settings['batch_timeout_seconds'],
+                'platform_prioritization': self.batch_settings['prioritize_by_platform']
+            },
+            'rate_limiting': {
+                'requests_per_minute_limit': 10,  # Based on our rate limiting
+                'current_request_count': len(self._request_timestamps)
+            },
+            'content_moderation': {
+                'enabled': self.moderation_enabled,
+                'quality_thresholds': self.quality_thresholds
+            }
+        }
+    
+    def _get_optimization_recommendations(self) -> List[Dict[str, Any]]:
+        """Generate AI-driven optimization recommendations"""
+        recommendations = []
+        
+        # Cost optimization recommendations
+        total_cost = float(self._cost_tracker['total_cost'])
+        if total_cost > 50:
+            recommendations.append({
+                'type': 'cost_optimization',
+                'priority': 'high',
+                'title': 'Consider Quality Optimization',
+                'description': 'High API usage detected. Consider using standard quality for some platforms to reduce costs.',
+                'potential_savings': '20-30%',
+                'action': 'Use standard quality for platforms where HD is not critical'
+            })
+        
+        # Platform optimization recommendations
+        platform_usage = self._cost_tracker['platform_costs']
+        most_used_platform = max(platform_usage.items(), key=lambda x: x[1]) if platform_usage else None
+        
+        if most_used_platform and float(most_used_platform[1]) > 20:
+            recommendations.append({
+                'type': 'platform_optimization',
+                'priority': 'medium',
+                'title': f'Optimize {most_used_platform[0].title()} Content',
+                'description': f'{most_used_platform[0]} is your most used platform. Consider creating platform-specific templates.',
+                'potential_improvement': '15-25% better engagement',
+                'action': f'Create custom template for {most_used_platform[0]}'
+            })
+        
+        # Template recommendations
+        if len(self.template_system['custom_templates']) == 0:
+            recommendations.append({
+                'type': 'branding',
+                'priority': 'medium',
+                'title': 'Create Custom Templates',
+                'description': 'No custom templates detected. Custom branding can improve brand consistency.',
+                'potential_improvement': 'Better brand recognition',
+                'action': 'Create at least one custom template for your brand'
+            })
+        
+        # System health recommendations
+        if hasattr(self, '_request_timestamps') and len(self._request_timestamps) > 8:
+            recommendations.append({
+                'type': 'performance',
+                'priority': 'low',
+                'title': 'Monitor Rate Limits',
+                'description': 'Approaching rate limits. Consider spreading requests over time.',
+                'potential_improvement': 'Avoid API throttling',
+                'action': 'Implement request scheduling'
+            })
+        
+        return recommendations
+    
+    def _calculate_remaining_budget_videos(self) -> Dict[str, int]:
+        """Calculate how many videos can be created with remaining budget"""
+        daily_remaining = float(self.cost_limits['daily_limit'] - self._cost_tracker['daily_cost'])
+        monthly_remaining = float(self.cost_limits['monthly_limit'] - self._cost_tracker['monthly_cost'])
+        
+        avg_cost_hd = float(self.pricing['image_to_video_hd'])
+        avg_cost_standard = float(self.pricing['image_to_video_standard'])
+        
+        return {
+            'daily_hd_videos': max(0, int(daily_remaining / avg_cost_hd)),
+            'daily_standard_videos': max(0, int(daily_remaining / avg_cost_standard)),
+            'monthly_hd_videos': max(0, int(monthly_remaining / avg_cost_hd)),
+            'monthly_standard_videos': max(0, int(monthly_remaining / avg_cost_standard))
+        }
+    
+    def _rank_platforms_by_cost_efficiency(self) -> List[Dict[str, Any]]:
+        """Rank platforms by cost efficiency"""
+        platform_rankings = []
+        
+        for platform, cost in self._cost_tracker['platform_costs'].items():
+            if cost > 0:
+                estimated_videos = max(1, int(float(cost) / 0.25))
+                efficiency_score = estimated_videos / float(cost) * 10  # Normalize to 0-10 scale
+                
+                platform_rankings.append({
+                    'platform': platform,
+                    'cost': float(cost),
+                    'estimated_videos': estimated_videos,
+                    'efficiency_score': round(efficiency_score, 2)
+                })
+        
+        return sorted(platform_rankings, key=lambda x: x['efficiency_score'], reverse=True)
+    
+    def _calculate_quality_cost_ratio(self) -> Dict[str, float]:
+        """Calculate cost ratio between HD and standard quality"""
+        hd_cost = float(self._cost_tracker['cost_by_quality']['hd'])
+        standard_cost = float(self._cost_tracker['cost_by_quality']['standard'])
+        
+        if standard_cost == 0:
+            return {'ratio': 'undefined', 'hd_premium': 0}
+        
+        ratio = hd_cost / standard_cost if standard_cost > 0 else 0
+        hd_premium = ((hd_cost - standard_cost) / standard_cost * 100) if standard_cost > 0 else 0
+        
+        return {
+            'hd_to_standard_ratio': round(ratio, 2),
+            'hd_premium_percentage': round(hd_premium, 1)
+        }
+    
+    def _identify_cost_optimization_opportunities(self) -> List[str]:
+        """Identify specific cost optimization opportunities"""
+        opportunities = []
+        
+        hd_percentage = self._cost_tracker['cost_by_quality']['hd'] / max(self._cost_tracker['total_cost'], Decimal('1'))
+        
+        if hd_percentage > 0.8:
+            opportunities.append("Consider using standard quality for some platforms to reduce costs by 20-40%")
+        
+        platform_costs = self._cost_tracker['platform_costs']
+        if len(platform_costs) > 0:
+            highest_cost_platform = max(platform_costs.items(), key=lambda x: x[1])
+            if float(highest_cost_platform[1]) > 20:
+                opportunities.append(f"Focus optimization efforts on {highest_cost_platform[0]} - your highest cost platform")
+        
+        if float(self._cost_tracker['daily_cost']) > float(self.cost_limits['daily_limit']) * 0.5:
+            opportunities.append("Daily cost exceeding 50% of limit - consider implementing cost controls")
+        
+        return opportunities if opportunities else ["System operating efficiently - no immediate optimizations needed"]
+    
+    def _calculate_platform_performance_score(self, platform: str) -> float:
+        """Calculate performance score for a platform (0-100)"""
+        # This is a simplified scoring system - in production would include engagement data
+        base_score = 70
+        
+        # Adjust based on platform optimization features
+        specs = self.platform_specs.get(platform, {})
+        if 'trending_features' in specs and len(specs['trending_features']) > 3:
+            base_score += 10
+        
+        if 'music_integration' in specs and specs['music_integration']:
+            base_score += 5
+        
+        if 'supports_shopping_tags' in specs and specs['supports_shopping_tags']:
+            base_score += 10
+        
+        # Adjust based on usage
+        platform_cost = self._cost_tracker['platform_costs'].get(platform, Decimal('0.00'))
+        if platform_cost > 10:
+            base_score += 5  # Bonus for proven usage
+        
+        return min(100, max(0, base_score))
+    
+    def _assess_platform_optimization(self, platform: str) -> str:
+        """Assess optimization level for platform"""
+        specs = self.platform_specs.get(platform, {})
+        
+        optimization_features = 0
+        if 'trending_features' in specs:
+            optimization_features += len(specs['trending_features'])
+        if 'popular_effects' in specs:
+            optimization_features += len(specs['popular_effects'])
+        if specs.get('music_integration'):
+            optimization_features += 2
+        if specs.get('captions_required'):
+            optimization_features += 1
+        
+        if optimization_features >= 8:
+            return 'highly_optimized'
+        elif optimization_features >= 5:
+            return 'well_optimized'
+        elif optimization_features >= 3:
+            return 'basic_optimization'
+        else:
+            return 'minimal_optimization'
+    
+    def _get_quality_recommendations(self, hd_cost: float, standard_cost: float) -> List[str]:
+        """Get quality usage recommendations"""
+        recommendations = []
+        
+        total_cost = hd_cost + standard_cost
+        if total_cost == 0:
+            return ["Start creating videos to get quality recommendations"]
+        
+        hd_percentage = (hd_cost / total_cost) * 100
+        
+        if hd_percentage > 80:
+            recommendations.append("High HD usage - consider standard quality for platforms like X/Twitter where HD may not be necessary")
+        elif hd_percentage < 20:
+            recommendations.append("Low HD usage - consider upgrading quality for platforms like Instagram and TikTok for better engagement")
+        else:
+            recommendations.append("Good quality distribution - balanced usage of HD and standard quality")
+        
+        return recommendations
+    
+    def _get_template_recommendations(self) -> List[str]:
+        """Get template system recommendations"""
+        recommendations = []
+        
+        built_in_templates = len(self.template_system['templates'])
+        custom_templates = len(self.template_system['custom_templates'])
+        
+        if custom_templates == 0:
+            recommendations.append("Create custom templates to establish consistent brand identity")
+        
+        if custom_templates > 0 and custom_templates < 3:
+            recommendations.append("Consider creating templates for different content types (professional, social, lifestyle)")
+        
+        recommendations.append(f"You have {built_in_templates} built-in templates and {custom_templates} custom templates available")
+        
+        return recommendations
+    
+    def _calculate_error_rates(self) -> Dict[str, float]:
+        """Calculate system error rates"""
+        total_requests = self._cost_tracker['requests_count']
+        successful_requests = self._cost_tracker['successful_requests']
+        
+        if total_requests == 0:
+            return {'overall_error_rate': 0.0, 'success_rate': 0.0}
+        
+        error_rate = ((total_requests - successful_requests) / total_requests) * 100
+        success_rate = (successful_requests / total_requests) * 100
+        
+        return {
+            'overall_error_rate': round(error_rate, 2),
+            'success_rate': round(success_rate, 2)
+        }
+    
+    def _get_enabled_features(self) -> List[str]:
+        """Get list of enabled system features"""
+        features = [
+            'veo3_integration',
+            'multi_platform_support',
+            'batch_processing',
+            'content_moderation',
+            'cost_tracking',
+            'template_system',
+            'queue_management',
+            'advanced_analytics'
+        ]
+        
+        if self.moderation_enabled:
+            features.append('content_moderation_active')
+        
+        if not self.using_mock_services:
+            features.append('real_api_integration')
+        else:
+            features.append('mock_services_testing')
+        
+        if self.db_manager:
+            features.append('database_integration')
+        
+        return features
+    
+    def _get_system_uptime(self) -> Dict[str, Any]:
+        """Get system uptime information"""
+        # This is simplified - in production would track actual startup time
+        return {
+            'status': 'operational',
+            'mock_services': self.using_mock_services,
+            'initialized_features': len(self._get_enabled_features()),
+            'platform_support_count': len(self.platform_specs)
+        }
+    
+    async def create_video_variants_advanced(self, enhanced_image_path: str, product_data: Dict[str, Any],
+                                           platforms: List[str] = None, **kwargs) -> Dict[str, VideoGenerationResult]:
+        """Advanced batch processing with intelligent queue management and retry logic"""
+        if platforms is None:
+            platforms = ['x', 'tiktok', 'instagram', 'linkedin', 'pinterest', 'youtube_shorts']
+        
+        self.logger.info(f"Starting advanced batch processing for {len(platforms)} platforms")
+        
+        # Create requests with proper prioritization
+        requests = []
+        for platform in platforms:
+            request = VideoGenerationRequest(
+                input_type='image',
+                input_data=enhanced_image_path,
+                platform=platform,
+                product_data=product_data,
+                priority=kwargs.get('priority', 'normal'),
+                **{k: v for k, v in kwargs.items() if k != 'priority'}
+            )
+            priority_score = self.batch_settings['prioritize_by_platform'].get(platform, 999)
+            requests.append((priority_score, request))
+        
+        # Sort requests by priority
+        requests.sort(key=lambda x: x[0])
+        
+        # Process with advanced queue management
+        results = await self._process_requests_with_advanced_queue(requests)
+        
+        return results
+    
+    async def _process_requests_with_advanced_queue(self, prioritized_requests: List[Tuple[int, VideoGenerationRequest]]) -> Dict[str, VideoGenerationResult]:
+        """Process requests using advanced queue management with failure recovery"""
+        results = {}
+        request_ids = {}
+        
+        # Add requests to appropriate priority queues
+        for priority_score, request in prioritized_requests:
+            request_id = f"{request.platform}_{int(time.time() * 1000)}"
+            request_ids[request.platform] = request_id
+            
+            if request.priority == 'high':
+                await self.queue_manager['high_priority'].put((priority_score, request_id, request))
+            elif request.priority == 'low':
+                await self.queue_manager['low_priority'].put((priority_score, request_id, request))
+            else:
+                await self.queue_manager['normal_priority'].put((priority_score, request_id, request))
+            
+            self.queue_manager['processing_status'][request_id] = 'queued'
+        
+        # Process queues in priority order
+        all_processed = False
+        retry_count = 0
+        max_retries = 2
+        
+        while not all_processed and retry_count <= max_retries:
+            # Process high priority queue first
+            await self._process_priority_queue('high_priority', results)
+            # Then normal priority
+            await self._process_priority_queue('normal_priority', results)
+            # Finally low priority
+            await self._process_priority_queue('low_priority', results)
+            
+            # Check if all requests are complete
+            completed_count = sum(1 for status in self.queue_manager['processing_status'].values() 
+                                if status in ['completed', 'failed'])
+            total_requests = len(prioritized_requests)
+            
+            if completed_count >= total_requests:
+                all_processed = True
+            elif retry_count < max_retries:
+                # Process retry queue
+                await self._process_retry_queue(results)
+                retry_count += 1
+            else:
+                # Mark remaining as failed
+                for request_id, status in self.queue_manager['processing_status'].items():
+                    if status not in ['completed', 'failed']:
+                        platform = [p for p, rid in request_ids.items() if rid == request_id][0]
+                        results[platform] = VideoGenerationResult(
+                            success=False,
+                            video_path=None,
+                            metadata={'max_retries_exceeded': True},
+                            cost=Decimal('0.00'),
+                            processing_time=0.0,
+                            platform=platform,
+                            error_message="Maximum retries exceeded"
+                        )
+                        self.queue_manager['processing_status'][request_id] = 'failed'
+                all_processed = True
+        
+        # Clean up processing status
+        for request_id in request_ids.values():
+            self.queue_manager['processing_status'].pop(request_id, None)
+            self.queue_manager['completion_callbacks'].pop(request_id, None)
+        
+        return results
+    
+    async def _process_priority_queue(self, queue_name: str, results: Dict[str, VideoGenerationResult]):
+        """Process a specific priority queue"""
+        priority_queue = self.queue_manager[queue_name]
+        processing_tasks = []
+        
+        # Create semaphore for this batch
+        semaphore = asyncio.Semaphore(self.batch_settings['max_concurrent_videos'])
+        
+        # Get all items from queue
+        queue_items = []
+        while not priority_queue.empty():
+            try:
+                item = priority_queue.get_nowait()
+                queue_items.append(item)
+            except:
+                break
+        
+        if not queue_items:
+            return
+        
+        self.logger.info(f"Processing {len(queue_items)} items from {queue_name} queue")
+        
+        async def process_single_request(priority_score, request_id, request):
+            async with semaphore:
+                try:
+                    self.queue_manager['processing_status'][request_id] = 'processing'
+                    
+                    result = await asyncio.wait_for(
+                        self.create_video_with_veo3(request),
+                        timeout=self.batch_settings['batch_timeout_seconds']
+                    )
+                    
+                    if result.success:
+                        results[request.platform] = result
+                        self.queue_manager['processing_status'][request_id] = 'completed'
+                        self.logger.info(f"✓ {request.platform} completed successfully")
+                    else:
+                        # Add to retry queue if retries are enabled
+                        if self.batch_settings['retry_failed_requests']:
+                            await self.queue_manager['retry_queue'].put((request_id, request, 1))
+                            self.queue_manager['processing_status'][request_id] = 'retry_queued'
+                            self.logger.warning(f"⚠ {request.platform} failed, added to retry queue")
+                        else:
+                            results[request.platform] = result
+                            self.queue_manager['processing_status'][request_id] = 'failed'
+                            self.logger.error(f"✗ {request.platform} failed permanently")
+                    
+                except asyncio.TimeoutError:
+                    error_result = VideoGenerationResult(
+                        success=False,
+                        video_path=None,
+                        metadata={'timeout': True},
+                        cost=Decimal('0.00'),
+                        processing_time=self.batch_settings['batch_timeout_seconds'],
+                        platform=request.platform,
+                        error_message=f"Processing timeout after {self.batch_settings['batch_timeout_seconds']}s"
+                    )
+                    results[request.platform] = error_result
+                    self.queue_manager['processing_status'][request_id] = 'failed'
+                    self.logger.error(f"✗ {request.platform} timed out")
+                    
+                except Exception as e:
+                    error_result = VideoGenerationResult(
+                        success=False,
+                        video_path=None,
+                        metadata={'exception': str(e)},
+                        cost=Decimal('0.00'),
+                        processing_time=0.0,
+                        platform=request.platform,
+                        error_message=str(e)
+                    )
+                    results[request.platform] = error_result
+                    self.queue_manager['processing_status'][request_id] = 'failed'
+                    self.logger.error(f"✗ {request.platform} exception: {e}")
+        
+        # Create tasks for all queue items
+        tasks = [
+            process_single_request(priority_score, request_id, request)
+            for priority_score, request_id, request in queue_items
+        ]
+        
+        # Process all tasks concurrently
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+    
+    async def _process_retry_queue(self, results: Dict[str, VideoGenerationResult]):
+        """Process failed requests that are eligible for retry"""
+        retry_items = []
+        
+        # Get all retry items
+        while not self.queue_manager['retry_queue'].empty():
+            try:
+                item = self.queue_manager['retry_queue'].get_nowait()
+                retry_items.append(item)
+            except:
+                break
+        
+        if not retry_items:
+            return
+        
+        self.logger.info(f"Processing {len(retry_items)} retry requests")
+        
+        for request_id, request, retry_count in retry_items:
+            if retry_count <= self.batch_settings['max_retries_per_request']:
+                try:
+                    self.queue_manager['processing_status'][request_id] = 'retrying'
+                    
+                    # Add delay for retry (exponential backoff)
+                    await asyncio.sleep(min(2 ** retry_count, 10))
+                    
+                    result = await self.create_video_with_veo3(request)
+                    
+                    if result.success:
+                        results[request.platform] = result
+                        self.queue_manager['processing_status'][request_id] = 'completed'
+                        self.logger.info(f"✓ {request.platform} retry successful")
+                    else:
+                        # Try again if under retry limit
+                        if retry_count < self.batch_settings['max_retries_per_request']:
+                            await self.queue_manager['retry_queue'].put((request_id, request, retry_count + 1))
+                            self.queue_manager['processing_status'][request_id] = 'retry_queued'
+                        else:
+                            results[request.platform] = result
+                            self.queue_manager['processing_status'][request_id] = 'failed'
+                            self.logger.error(f"✗ {request.platform} max retries exceeded")
+                            
+                except Exception as e:
+                    if retry_count < self.batch_settings['max_retries_per_request']:
+                        await self.queue_manager['retry_queue'].put((request_id, request, retry_count + 1))
+                        self.queue_manager['processing_status'][request_id] = 'retry_queued'
+                    else:
+                        error_result = VideoGenerationResult(
+                            success=False,
+                            video_path=None,
+                            metadata={'retry_exception': str(e)},
+                            cost=Decimal('0.00'),
+                            processing_time=0.0,
+                            platform=request.platform,
+                            error_message=f"Retry failed: {e}"
+                        )
+                        results[request.platform] = error_result
+                        self.queue_manager['processing_status'][request_id] = 'failed'
+            else:
+                # Max retries exceeded
+                error_result = VideoGenerationResult(
+                    success=False,
+                    video_path=None,
+                    metadata={'max_retries_exceeded': True},
+                    cost=Decimal('0.00'),
+                    processing_time=0.0,
+                    platform=request.platform,
+                    error_message="Maximum retry attempts exceeded"
+                )
+                results[request.platform] = error_result
+                self.queue_manager['processing_status'][request_id] = 'failed'
+    
+    def get_queue_status(self) -> Dict[str, Any]:
+        """Get current queue status and processing statistics"""
+        queue_sizes = {
+            'high_priority': self.queue_manager['high_priority'].qsize(),
+            'normal_priority': self.queue_manager['normal_priority'].qsize(),
+            'low_priority': self.queue_manager['low_priority'].qsize(),
+            'retry_queue': self.queue_manager['retry_queue'].qsize(),
+        }
+        
+        processing_status_counts = {}
+        for status in self.queue_manager['processing_status'].values():
+            processing_status_counts[status] = processing_status_counts.get(status, 0) + 1
+        
+        return {
+            'queue_sizes': queue_sizes,
+            'total_queued': sum(queue_sizes.values()),
+            'processing_status': processing_status_counts,
+            'active_requests': len(self.queue_manager['processing_status']),
+            'concurrent_limit': self.batch_settings['max_concurrent_videos'],
+            'retry_enabled': self.batch_settings['retry_failed_requests'],
+            'max_retries': self.batch_settings['max_retries_per_request']
+        }
 
     def _get_video_metadata(self, video_path: str, request: VideoGenerationRequest) -> Dict[str, Any]:
         """Get comprehensive metadata about the generated video"""
@@ -1369,24 +2789,294 @@ class VideoGenerator:
             self._request_timestamps.append(current_time)
     
     async def _moderate_content(self, request: VideoGenerationRequest) -> Dict[str, Any]:
-        """Perform content moderation on video generation request"""
+        """Perform comprehensive content moderation on video generation request"""
         try:
-            # Moderation logic would integrate with content moderation APIs
-            # For now, return approved for demonstration
-            return {
-                'approved': True,
-                'confidence': 0.95,
-                'categories': [],
-                'reasoning': 'Content passed basic moderation checks'
+            moderation_results = {
+                'text_moderation': await self._moderate_text_content(request),
+                'image_moderation': await self._moderate_image_content(request),
+                'brand_safety': await self._check_brand_safety(request),
+                'platform_compliance': await self._check_platform_compliance(request),
+                'quality_gates': await self._check_quality_gates(request)
             }
+            
+            # Aggregate moderation results
+            all_approved = all(result.get('approved', True) for result in moderation_results.values())
+            confidence_scores = [result.get('confidence', 1.0) for result in moderation_results.values()]
+            avg_confidence = sum(confidence_scores) / len(confidence_scores)
+            
+            # Collect all categories and issues
+            all_categories = []
+            all_issues = []
+            for result in moderation_results.values():
+                all_categories.extend(result.get('categories', []))
+                if 'issues' in result:
+                    all_issues.extend(result['issues'])
+            
+            return {
+                'approved': all_approved,
+                'confidence': avg_confidence,
+                'categories': list(set(all_categories)),
+                'detailed_results': moderation_results,
+                'issues': all_issues,
+                'reasoning': self._generate_moderation_reasoning(moderation_results, all_approved)
+            }
+            
         except Exception as e:
             self.logger.error(f"Content moderation failed: {e}")
             return {
                 'approved': False,
                 'confidence': 0.0,
                 'categories': ['moderation_error'],
-                'reasoning': f'Moderation failed: {e}'
+                'reasoning': f'Moderation system failed: {e}',
+                'error': str(e)
             }
+    
+    async def _moderate_text_content(self, request: VideoGenerationRequest) -> Dict[str, Any]:
+        """Moderate text content in the request"""
+        try:
+            # Check product data text content
+            text_to_check = []
+            if isinstance(request.input_data, str) and request.input_type == 'text':
+                text_to_check.append(request.input_data)
+            
+            # Check product descriptions
+            product_text = ' '.join([
+                str(request.product_data.get('name', '')),
+                str(request.product_data.get('description', '')),
+                str(request.product_data.get('features', ''))
+            ])
+            text_to_check.append(product_text)
+            
+            # Basic content filters
+            blocked_terms = [
+                'spam', 'scam', 'fake', 'illegal', 'adult', 'violence',
+                'hate', 'discrimination', 'misleading', 'dangerous'
+            ]
+            
+            issues = []
+            for text in text_to_check:
+                if text:
+                    text_lower = text.lower()
+                    for term in blocked_terms:
+                        if term in text_lower:
+                            issues.append(f"Contains potentially inappropriate term: {term}")
+            
+            return {
+                'approved': len(issues) == 0,
+                'confidence': 0.9 if len(issues) == 0 else 0.3,
+                'categories': ['text_content'] if issues else [],
+                'issues': issues,
+                'text_analyzed': len(' '.join(text_to_check).split())
+            }
+            
+        except Exception as e:
+            return {
+                'approved': False,
+                'confidence': 0.0,
+                'categories': ['text_moderation_error'],
+                'issues': [f"Text moderation failed: {e}"]
+            }
+    
+    async def _moderate_image_content(self, request: VideoGenerationRequest) -> Dict[str, Any]:
+        """Moderate image content if provided"""
+        try:
+            if request.input_type != 'image' or not request.input_data:
+                return {'approved': True, 'confidence': 1.0, 'categories': []}
+                
+            # Check if image file exists and is accessible
+            if not os.path.exists(request.input_data):
+                return {
+                    'approved': False,
+                    'confidence': 0.0,
+                    'categories': ['missing_image'],
+                    'issues': ['Image file does not exist']
+                }
+            
+            # Basic image checks
+            try:
+                from PIL import Image
+                with Image.open(request.input_data) as img:
+                    width, height = img.size
+                    
+                    # Check minimum resolution
+                    if width < 500 or height < 500:
+                        return {
+                            'approved': False,
+                            'confidence': 0.5,
+                            'categories': ['low_quality_image'],
+                            'issues': ['Image resolution too low for quality video generation']
+                        }
+                    
+                    # Check aspect ratio reasonableness
+                    aspect_ratio = width / height
+                    if aspect_ratio > 5 or aspect_ratio < 0.2:
+                        return {
+                            'approved': False,
+                            'confidence': 0.4,
+                            'categories': ['unusual_aspect_ratio'],
+                            'issues': ['Image has unusual aspect ratio that may not work well for video']
+                        }
+            except Exception as img_error:
+                return {
+                    'approved': False,
+                    'confidence': 0.0,
+                    'categories': ['image_processing_error'],
+                    'issues': [f'Could not process image: {img_error}']
+                }
+            
+            return {
+                'approved': True,
+                'confidence': 0.9,
+                'categories': [],
+                'image_dimensions': f"{width}x{height}"
+            }
+            
+        except Exception as e:
+            return {
+                'approved': False,
+                'confidence': 0.0,
+                'categories': ['image_moderation_error'],
+                'issues': [f"Image moderation failed: {e}"]
+            }
+    
+    async def _check_brand_safety(self, request: VideoGenerationRequest) -> Dict[str, Any]:
+        """Check brand safety considerations"""
+        try:
+            issues = []
+            
+            # Check for brand safety categories
+            sensitive_categories = [
+                'alcohol', 'gambling', 'tobacco', 'pharmaceuticals', 
+                'political', 'religious', 'adult', 'weapons'
+            ]
+            
+            product_category = request.product_data.get('category', '').lower()
+            if any(sensitive in product_category for sensitive in sensitive_categories):
+                issues.append(f"Product category '{product_category}' requires special handling")
+            
+            # Check platform suitability
+            platform = request.platform
+            if platform == 'linkedin' and product_category in ['entertainment', 'gaming', 'lifestyle']:
+                issues.append("Entertainment content may not perform well on LinkedIn")
+            
+            return {
+                'approved': len(issues) == 0,
+                'confidence': 0.8 if len(issues) == 0 else 0.6,
+                'categories': ['brand_safety'] if issues else [],
+                'issues': issues
+            }
+            
+        except Exception as e:
+            return {
+                'approved': True,  # Default to approved for brand safety
+                'confidence': 0.5,
+                'categories': ['brand_safety_error'],
+                'issues': [f"Brand safety check failed: {e}"]
+            }
+    
+    async def _check_platform_compliance(self, request: VideoGenerationRequest) -> Dict[str, Any]:
+        """Check platform-specific compliance requirements"""
+        try:
+            issues = []
+            platform_spec = self.platform_specs.get(request.platform)
+            
+            if not platform_spec:
+                issues.append(f"Unsupported platform: {request.platform}")
+                return {
+                    'approved': False,
+                    'confidence': 0.0,
+                    'categories': ['unsupported_platform'],
+                    'issues': issues
+                }
+            
+            # Check duration compliance
+            max_duration = platform_spec['max_duration']
+            if request.duration > max_duration:
+                issues.append(f"Duration {request.duration}s exceeds platform maximum {max_duration}s")
+            
+            # Check quality requirements
+            if request.quality not in ['hd', 'standard']:
+                issues.append(f"Invalid quality setting: {request.quality}")
+            
+            # Platform-specific checks
+            if request.platform == 'linkedin' and not request.add_captions:
+                issues.append("LinkedIn videos should include captions for accessibility")
+            
+            if request.platform == 'tiktok' and request.duration > 60:
+                issues.append("TikTok videos over 60 seconds have lower engagement rates")
+            
+            return {
+                'approved': len(issues) == 0,
+                'confidence': 0.95 if len(issues) == 0 else 0.7,
+                'categories': ['platform_compliance'] if issues else [],
+                'issues': issues
+            }
+            
+        except Exception as e:
+            return {
+                'approved': True,  # Default to approved
+                'confidence': 0.5,
+                'categories': ['compliance_check_error'],
+                'issues': [f"Platform compliance check failed: {e}"]
+            }
+    
+    async def _check_quality_gates(self, request: VideoGenerationRequest) -> Dict[str, Any]:
+        """Check quality gates for video generation"""
+        try:
+            issues = []
+            warnings = []
+            
+            # Check product data completeness
+            required_fields = ['name']
+            for field in required_fields:
+                if not request.product_data.get(field):
+                    issues.append(f"Missing required product field: {field}")
+            
+            recommended_fields = ['description', 'features', 'category']
+            for field in recommended_fields:
+                if not request.product_data.get(field):
+                    warnings.append(f"Missing recommended product field: {field}")
+            
+            # Check request parameters
+            if request.duration < 5:
+                issues.append("Video duration too short (minimum 5 seconds recommended)")
+            elif request.duration < 10:
+                warnings.append("Short video duration may limit engagement")
+            
+            # Style and customization checks
+            if not request.style or request.style == 'default':
+                warnings.append("Using default style - custom styling may improve performance")
+            
+            return {
+                'approved': len(issues) == 0,
+                'confidence': 0.9 if len(issues) == 0 and len(warnings) == 0 else 0.7,
+                'categories': ['quality_gates'] if issues else [],
+                'issues': issues,
+                'warnings': warnings
+            }
+            
+        except Exception as e:
+            return {
+                'approved': True,  # Default to approved for quality gates
+                'confidence': 0.5,
+                'categories': ['quality_gate_error'],
+                'issues': [f"Quality gate check failed: {e}"]
+            }
+    
+    def _generate_moderation_reasoning(self, results: Dict[str, Any], approved: bool) -> str:
+        """Generate human-readable reasoning for moderation decision"""
+        if approved:
+            return "Content passed all moderation checks and quality gates"
+        
+        issues = []
+        for check_name, result in results.items():
+            if not result.get('approved', True) and result.get('issues'):
+                issues.extend([f"{check_name}: {issue}" for issue in result['issues']])
+        
+        if issues:
+            return f"Content rejected due to: {'; '.join(issues[:3])}" + ("..." if len(issues) > 3 else "")
+        else:
+            return "Content rejected by moderation system"
     
     def _calculate_cost(self, request: VideoGenerationRequest) -> Decimal:
         """Calculate cost for video generation with platform and quality considerations"""
